@@ -118,9 +118,20 @@ export class DockerOrchestrator {
       stdout: true,
       stderr: true,
       tail
-    });
+    }) as any;
 
-    return stream.toString('utf-8');
+    return new Promise((resolve, reject) => {
+      let logs = '';
+      stream.on('data', (chunk: Buffer) => {
+        logs += chunk.toString('utf-8');
+      });
+      stream.on('end', () => {
+        resolve(logs);
+      });
+      stream.on('error', (err: Error) => {
+        reject(err);
+      });
+    });
   }
 
   getDockerClient(): Docker {
