@@ -4,10 +4,13 @@ import dotenv from 'dotenv';
 import { WebSocketService } from './services/websocket';
 import { DualWebSocketService } from './services/dual-websocket';
 import { feishuOAuth } from './services/feishu-oauth';
+import { orchestrator } from './services/orchestrator';
+import { feishuWebSocket } from './services/feishu-websocket';
 import authRoutes from './routes/auth';
 import configRoutes from './routes/config';
 import feishuRoutes, { setWebSocketService, setDualWebSocketService } from './routes/feishu';
 import qrcodeRoutes from './routes/qrcode';
+import orchestratorRoutes from './routes/orchestrator';
 
 // Load environment variables
 dotenv.config();
@@ -42,12 +45,31 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/feishu', feishuRoutes);
+app.use('/api/orchestrator', orchestratorRoutes);
 app.use('/', qrcodeRoutes); // QR code routes
 
 // 定期清理过期的 OAuth 会话
 setInterval(() => {
   feishuOAuth.cleanupExpiredSessions();
 }, 60 * 1000); // 每分钟清理一次
+
+// 初始化 orchestrator 和 Feishu WebSocket
+async function initializeOrchestrator() {
+  try {
+    console.log('[Server] Initializing orchestrator and Feishu WebSocket...');
+
+    // Start Feishu WebSocket connection
+    await feishuWebSocket.start();
+
+    // Initialize orchestrator (this registers the message handler)
+    await orchestrator.initialize();
+
+    console.log('[Server] Orchestrator and Feishu WebSocket initialized successfully');
+  } catch (error) {
+    console.error('[Server] Failed to initialize orchestrator:', error);
+    throw error;
+  }
+}
 
 // 404 处理
 app.use((req, res) => {
@@ -78,23 +100,40 @@ if (USE_DUAL_WS) {
   setWebSocketService(wsService);
 }
 
-app.listen(PORT, () => {
+// Start API server and initialize orchestrator
+app.listen(PORT, async () => {
   console.log(`API server running on port ${PORT}`);
   console.log(`WebSocket server running on port ${WS_PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // Initialize orchestrator and Feishu WebSocket after server starts
+  await initializeOrchestrator();
 });
 
 // 优雅关闭
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  if (wsService) wsService.close();
-  if (dualWsService) dualWsService.close();
-  process.exit(0);
-});
+const gracefulShutdown = async (signal: string) => {
+  console.log(`${signal} received, shutting down gracefully...`);
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  if (wsService) wsService.close();
-  if (dualWsService) dualWsService.close();
-  process.exit(0);
-});
+  try {
+    // Stop Feishu WebSocket
+    feishuWebSocket.stop(true);
+    console.log('[Server] Feishu WebSocket stopped');
+
+    // Shutdown orchestrator
+    await orchestrator.shutdown();
+    console.log('[Server] Orchestrator shut down');
+
+    // Close WebSocket services
+    if (wsService) wsService.close();
+    if (dualWsService) dualWsService.close();
+
+    console.log('[Server] All services shut down successfully');
+    process.exit(0);
+  } catch (error) {
+    console.error('[Server] Error during graceful shutdown:', error);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
