@@ -10,7 +10,7 @@ services:
       - "5189:5189"
       - "5190:5190"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-production}
       - PORT=5178
       - WS_PORT=5179
       - FEISHU_WS_PORT=5189
@@ -21,6 +21,7 @@ services:
       - JWT_EXPIRES_IN=30d
       - FEISHU_APP_ID=${FEISHU_APP_ID}
       - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
       - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-zhipu}
@@ -29,6 +30,8 @@ services:
       - SERVER_BASE_URL=${SERVER_BASE_URL:-http://localhost:5178}
     volumes:
       - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket access
+      - ~/.openclaw:/root/.openclaw  # OpenClaw storage
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5178/health"]

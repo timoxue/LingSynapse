@@ -18,6 +18,9 @@ WORKDIR /app
 # 安装 sqlite3 运行时依赖
 RUN apk add --no-cache sqlite
 
+# Install Docker CLI for Docker-in-Docker
+RUN apk add --no-cache docker-cli
+
 # 复制 package 文件并安装生产依赖
 COPY package*.json ./
 RUN npm install --omit=dev
