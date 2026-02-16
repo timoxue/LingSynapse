@@ -32,3 +32,27 @@ export interface ConfigResponse {
   apiKey: string;
   baseUrl?: string;
 }
+
+export interface DockerContainerInfo {
+  containerId: string;
+  userId: string;
+  userToken: string;
+  gatewayToken: string;
+  port: number;
+  status: 'creating' | 'running' | 'stopped' | 'error';
+  createdAt: Date;
+}
+
+export interface UserSandboxState {
+  userId: string;
+  userToken: string;
+  containerInfo: DockerContainerInfo | null;
+  awaitingConfirmation: boolean;
+  lastActivity: Date;
+}
+
+export interface IgniteOptions {
+  userId: string;
+  userToken: string;
+  storagePath?: string;
+}
