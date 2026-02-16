@@ -56,3 +56,53 @@ export interface IgniteOptions {
   userToken: string;
   storagePath?: string;
 }
+
+export interface FeishuWSMessage {
+  header: {
+    event_id: string;
+    event_type: string;
+    create_time: string;
+    token: string;
+    app_type: string;
+    tenant_key: string;
+  };
+  event: {
+    sender: {
+      sender_id: {
+        user_id: string;
+      };
+      sender_type: string;
+    };
+    message: {
+      message_id: string;
+      chat_type: string;
+      chat_id: string;
+      content: string;
+      create_time: string;
+    };
+  };
+}
+
+export interface FeishuInteractiveCard {
+  config: {
+    wide_screen_mode: boolean;
+  };
+  header: {
+    title: {
+      tag: 'plain_text';
+      content: string;
+    };
+    template: string;
+  };
+  elements: any[];
+}
+
+export interface FeishuCardButton {
+  tag: 'button';
+  text: {
+    tag: 'plain_text';
+    content: string;
+  };
+  type: 'primary' | 'default';
+  value: any;
+}
