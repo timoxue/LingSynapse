@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import 'dotenv/config';
+import { config } from 'dotenv/config';
 import { orchestrator } from '../../src/services/orchestrator';
 import { dockerOrchestrator } from '../../src/services/docker-orchestrator';
 import { DockerContainerInfo, UserSandboxState } from '../../src/types';
@@ -9,7 +9,7 @@ describe('Orchestrator Integration Tests', () => {
 
   beforeAll(async () => {
     console.log('[Integration] Loading .env file...');
-    const result = dotenv.config();
+    const result = config();
     console.log('[Integration] Environment variables loaded:', result.error ? 'failed' : 'success');
 
     console.log('[Integration] Setting up test environment...');
