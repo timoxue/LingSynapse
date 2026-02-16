@@ -1,0 +1,9 @@
+{
+  "appId": "${FEISHU_APP_ID}",
+  "appSecret": "${FEISHU_APP_SECRET}",
+  "encryptKey": "${FEISHU_ENCRYPT_KEY}",
+  "verificationToken": "${FEISHU_VERIFICATION_TOKEN}",
+  "eventTypes": [
+    "im.message.receive_v1"
+  ]
+}
