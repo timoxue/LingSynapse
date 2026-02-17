@@ -167,7 +167,7 @@ export class SynapseOrchestrator {
   }
 
   /**
-   * Handle explicit commands (@agent, @exit, etc.)
+   * Handle explicit commands (!agent, !exit, etc.)
    * Returns true if command was handled, false otherwise
    */
   private async handleExplicitCommands(userId: string, textContent: string): Promise<boolean> {
@@ -175,19 +175,19 @@ export class SynapseOrchestrator {
 
     console.log(`[Orchestrator] Checking explicit commands: "${text}"`);
 
-    // Handle @agent format: @_user_1, @claude, @openclaw, @gpt, etc.
-    const agentRegex = /^@([a-zA-Z0-9_]+)\s*(.*)?$/i;
+    // Handle !agent format: !openclaw, !claude, !gpt, etc.
+    const agentRegex = /^!([a-zA-Z0-9_]+)\s*(.*)?$/i;
     const agentMatch = text.match(agentRegex);
     if (agentMatch) {
       const agentName = agentMatch[1].toLowerCase();
       const command = agentMatch[2] ? agentMatch[2].trim() : '';
-      console.log(`[Orchestrator] Agent command: @${agentName} ${command ? command : '(no command)'}`);
+      console.log(`[Orchestrator] Agent command: !${agentName} ${command ? command : '(no command)'}`);
       await this.handleAgentCommand(userId, agentName, command);
       return true;
     }
 
-    // Handle @exit/@quit (exit current mode)
-    const exitRegex = /^@(exit|quit)$/i;
+    // Handle !exit/!quit (exit current mode)
+    const exitRegex = /^!(exit|quit)$/i;
     if (exitRegex.test(text)) {
       console.log(`[Orchestrator] Exiting current mode`);
       await this.exitCurrentMode(userId);
@@ -238,8 +238,8 @@ export class SynapseOrchestrator {
 
     console.log(`[Orchestrator] [Agent模式 ${agentName}] 处理消息: ${text}`);
 
-    // Check if @exit is included in message
-    const exitRegex = /^@(exit|quit)$/i;
+    // Check if !exit is included in message
+    const exitRegex = /^!(exit|quit)$/i;
     if (exitRegex.test(text)) {
       await this.exitCurrentMode(userId);
       return;
@@ -254,7 +254,7 @@ export class SynapseOrchestrator {
     if (!hasContainer) {
       await sendFeishuMessage(
         userId,
-        `容器${containerName}未运行。请先使用 @${agentName} status 查看状态，或 @${agentName} start/restart 启动容器。`
+        `容器${containerName}未运行。请先使用 !${agentName} status 查看状态，或 !${agentName} start/restart 启动容器。`
       );
       return;
     }
@@ -279,12 +279,12 @@ export class SynapseOrchestrator {
 **欢迎使用 OpenClaw**
 
 快速开始：
-• @openclaw - 进入OpenClaw控制模式
+• !openclaw - 进入OpenClaw控制模式
 • 启动 - 启动沙箱容器
 
 帮助：
-• @openclaw help - 查看所有可用命令
-• @exit - 退出当前模式
+• !openclaw help - 查看所有可用命令
+• !exit - 退出当前模式
       `.trim();
       await sendFeishuMessage(userId, hint);
       return;
@@ -294,7 +294,7 @@ export class SynapseOrchestrator {
     const agentDisplay = agentName ? this.getAgentConfig(agentName)?.displayName || agentName : 'OpenClaw';
     await sendFeishuMessage(
       userId,
-      `收到消息: ${textContent}\n\n提示：使用 @${agentName} 进入${agentDisplay}模式与容器${containerName}交互。`
+      `收到消息: ${textContent}\n\n提示：使用 !${agentName} 进入${agentDisplay}模式与容器${containerName}交互。`
     );
   }
 
@@ -327,14 +327,14 @@ export class SynapseOrchestrator {
   }
 
   /**
-   * Handle @agent <command> explicit commands
+   * Handle !agent <command> explicit commands
    */
   private async handleAgentCommand(userId: string, agentName: string, command: string): Promise<void> {
     const cmd = command.toLowerCase().trim();
     const agentConfig = this.getAgentConfig(agentName);
     const agentDisplay = agentConfig?.displayName || agentName;
 
-    console.log(`[Orchestrator] Executing @${agentName} command: ${cmd}`);
+    console.log(`[Orchestrator] Executing !${agentName} command: ${cmd}`);
 
     switch (cmd) {
       case 'status':
@@ -359,18 +359,18 @@ export class SynapseOrchestrator {
         break;
 
       case '':
-        // Just @agent, show menu
+        // Just !agent, show menu
         await this.enterAgentMode(userId, agentName);
         break;
 
       default:
         // Unknown command, show menu
-        await sendFeishuMessage(userId, `未知命令: ${cmd}\n\n请使用 @${agentName} help 查看所有可用命令。`);
+        await sendFeishuMessage(userId, `未知命令: ${cmd}\n\n请使用 !${agentName} help 查看所有可用命令。`);
     }
   }
 
   /**
-   * Handle @agent status
+   * Handle !agent status
    */
   private async handleAgentStatus(userId: string, agentName: string): Promise<void> {
     const agentConfig = this.getAgentConfig(agentName);
@@ -391,8 +391,8 @@ export class SynapseOrchestrator {
 状态：不存在
 
 可用操作：
-• @${agentName} start - 启动容器
-• @${agentName} rebuild - 创建新容器
+• !${agentName} start - 启动容器
+• !${agentName} rebuild - 创建新容器
         `.trim()
       );
       return;
@@ -415,18 +415,18 @@ export class SynapseOrchestrator {
 当前容器正在运行。
 
 可用操作：
-• @${agentName} <消息> - 转发消息给容器
-• @${agentName} restart - 重启容器
-• @${agentName} stop - 停止容器
-• @${agentName} rebuild - 重新部署
-• @exit - 退出控制模式
+• !${agentName} <消息> - 转发消息给容器
+• !${agentName} restart - 重启容器
+• !${agentName} stop - 停止容器
+• !${agentName} rebuild - 重新部署
+• !exit - 退出控制模式
         `.trim()
       );
     }
   }
 
   /**
-   * Handle @agent start/restart
+   * Handle !agent start/restart
    */
   private async handleAgentStartOrRestart(userId: string, agentName: string, command: string): Promise<void> {
     const agentConfig = this.getAgentConfig(agentName);
@@ -450,7 +450,7 @@ export class SynapseOrchestrator {
         console.log(`[Orchestrator] Restarting container for user ${userId}`);
         await this.rebuildSandboxForAgent(userId, agentName);
       } else {
-        await sendFeishuMessage(userId, `容器已在运行。\n\n使用 @${agentName} restart 重启容器。`);
+        await sendFeishuMessage(userId, `容器已在运行。\n\n使用 !${agentName} restart 重启容器。`);
       }
       return;
     }
@@ -475,21 +475,21 @@ export class SynapseOrchestrator {
   }
 
   /**
-   * Handle @agent stop
+   * Handle !agent stop
    */
   private async handleAgentStop(userId: string, agentName: string): Promise<void> {
     await this.stopSandboxForAgent(userId, agentName);
   }
 
   /**
-   * Handle @agent rebuild
+   * Handle !agent rebuild
    */
   private async handleAgentRebuild(userId: string, agentName: string): Promise<void> {
     await this.rebuildSandboxForAgent(userId, agentName);
   }
 
   /**
-   * Handle @agent help
+   * Handle !agent help
    */
   private async handleAgentHelp(userId: string, agentName: string): Promise<void> {
     const agentConfig = this.getAgentConfig(agentName);
@@ -499,28 +499,28 @@ export class SynapseOrchestrator {
 **${agentDisplay} 控制命令**
 
 **容器管理**
-• @${agentName} status - 查看容器状态
-• @${agentName} start - 启动容器
-• @${agentName} restart - 重启容器
-• @${agentName} stop - 停止容器
-• @${agentName} rebuild - 重新部署容器
+• !${agentName} status - 查看容器状态
+• !${agentName} start - 启动容器
+• !${agentName} restart - 重启容器
+• !${agentName} stop - 停止容器
+• !${agentName} rebuild - 重新部署容器
 
 **模式控制**
-• @${agentName} - 进入控制模式
-• @exit / @quit - 退出当前模式
+• !${agentName} - 进入控制模式
+• !exit / !quit - 退出当前模式
 
 **控制模式**
 在控制模式下，所有消息都会转发给容器进行交互。
 
 **一次性命令**
-• @${agentName} <命令> - 执行一次性命令而不进入模式
+• !${agentName} <命令> - 执行一次性命令而不进入模式
 
 **示例**
-• @${agentName} status - 查看状态
-• @${agentName} 你好 - 一次性交流
-• @${agentName} - 进入控制模式
+• !${agentName} status - 查看状态
+• !${agentName} 你好 - 一次性交流
+• !${agentName} - 进入控制模式
 • 你好 - 在控制模式下转发给容器
-• @exit - 退出控制模式
+• !exit - 退出控制模式
     `.trim();
 
     await sendFeishuMessage(userId, help);
@@ -546,13 +546,13 @@ export class SynapseOrchestrator {
 当前状态：${this.getStateDescription(status)}
 
 可用命令：
-• @${agentName} status - 查看容器状态
-• @${agentName} start/restart - ${status === 'running' ? '重启' : '启动'}容器
-• @${agentName} stop - 停止容器
-• @${agentName} rebuild - 重新部署
-• @${agentName} <消息> - 转发消息给容器
-• @${agentName} help - 查看所有命令
-• @exit - 退出控制模式
+• !${agentName} status - 查看容器状态
+• !${agentName} start/restart - ${status === 'running' ? '重启' : '启动'}容器
+• !${agentName} stop - 停止容器
+• !${agentName} rebuild - 重新部署
+• !${agentName} <消息> - 转发消息给容器
+• !${agentName} help - 查看所有命令
+• !exit - 退出控制模式
 
 现在处于${agentDisplay}控制模式，所有消息都会转发给容器${containerName}。
       `.trim()
