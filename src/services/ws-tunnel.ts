@@ -212,6 +212,29 @@ export class WSTunnelService {
   }
 
   /**
+   * Send message directly to container (for Feishu message forwarding)
+   *
+   * @param userId - User identifier
+   * @param message - Message string to send to container
+   */
+  sendToContainer(userId: string, message: string): void {
+    const containerWs = this.containerConnections.get(userId);
+
+    if (!containerWs || containerWs.readyState !== WebSocket.OPEN) {
+      console.warn(`[WSTunnel] No active container connection for user ${userId}, cannot send message`);
+      return;
+    }
+
+    try {
+      // Send message directly to container
+      containerWs.send(message);
+      console.log(`[WSTunnel] Sent message directly to container for user ${userId}: ${message}`);
+    } catch (error) {
+      console.error(`[WSTunnel] Error sending message to container for user ${userId}:`, error);
+    }
+  }
+
+  /**
    * Handle messages from container and forward to Node client
    *
    * @param userId - User identifier
@@ -291,6 +314,17 @@ export class WSTunnelService {
       nodeWs?.readyState === WebSocket.OPEN &&
       containerWs?.readyState === WebSocket.OPEN
     );
+  }
+
+  /**
+   * Check if user has active container connection
+   *
+   * @param userId - User identifier
+   * @returns True if user has container connection (for Feishu message forwarding)
+   */
+  hasContainerConnection(userId: string): boolean {
+    const containerWs = this.containerConnections.get(userId);
+    return containerWs?.readyState === WebSocket.OPEN;
   }
 
   /**

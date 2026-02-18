@@ -10,6 +10,9 @@ RUN npm ci
 
 COPY src ./src
 
+# 清除可能的缓存
+RUN rm -rf node_modules/.cache || true
+
 RUN npm run build
 
 FROM node:22-alpine

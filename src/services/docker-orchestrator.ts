@@ -1,9 +1,12 @@
 import Docker from 'dockerode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { randomBytes } from 'crypto';
 import dockerConfig from '../../config/docker.json';
 import { DockerContainerInfo, IgniteOptions } from '../types';
 import { createLogger } from '../utils/logger';
 import { tokenService } from './token';
+import { generateOpenClawConfig, writeOpenClawConfig } from './openclaw-config-generator';
 
 const logger = createLogger('Docker');
 
@@ -20,12 +23,17 @@ export class DockerOrchestrator {
   }
 
   async igniteSandbox(options: IgniteOptions): Promise<DockerContainerInfo> {
-    const { userId, userToken, storagePath } = options;
+    const { userId, userToken, storagePath, modelChoice = 'glm-4.7' } = options;
     const gatewayToken = this.generateGatewayToken();
     const containerName = `${dockerConfig.containerPrefix}${userId}`;
     const hostStoragePath = storagePath || dockerConfig.storagePath.replace('{userId}', userId);
 
-    logger.info(`Igniting sandbox for user ${userId}...`);
+    logger.info(`Igniting sandbox for user ${userId} with model ${modelChoice}...`);
+
+    // Generate OpenClaw config based on model choice
+    const openclawConfig = generateOpenClawConfig(userId, modelChoice);
+    const configPath = writeOpenClawConfig(userId, openclawConfig, hostStoragePath);
+    logger.info(`OpenClaw config written to: ${configPath}`);
 
     // Create container
     const container = await this.docker.createContainer({
@@ -49,7 +57,8 @@ export class DockerOrchestrator {
       HostConfig: {
         NetworkMode: dockerConfig.network,
         Binds: [
-          `${hostStoragePath}:/app/storage:rw`
+          `${hostStoragePath}:/app/storage:rw`,
+          `${hostStoragePath}/../${userId}/openclaw.json:/app/.openclaw/openclaw.json:ro`
         ],
         AutoRemove: dockerConfig.autoRemove,
         // No port bindings needed - containers communicate via Docker network

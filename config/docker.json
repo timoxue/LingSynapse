@@ -7,7 +7,7 @@
   "storagePath": "/Users/timo/openclaw/sandboxes/{userId}/storage",
   "autoRemove": true,
   "environment": {
-    "OPENCLAW_MODE": "relay",
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "OPENCLAW_CONFIG_DIR": "/app/.openclaw"
   }
 }

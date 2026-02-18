@@ -55,6 +55,8 @@ export interface IgniteOptions {
   userId: string;
   userToken: string;
   storagePath?: string;
+  modelChoice?: string;
+  configPath?: string;
 }
 
 export interface FeishuWSMessage {

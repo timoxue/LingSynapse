@@ -1,5 +1,5 @@
 import { dockerOrchestrator } from './docker-orchestrator';
-import { sendFeishuMessage } from './feishu-client';
+import { sendFeishuMessage } from '../server';
 import { tokenService } from './token';
 import { wsTunnel } from './ws-tunnel';
 import { UserSandboxState, DockerContainerInfo, IgniteOptions, FeishuWSMessage } from '../types';
@@ -36,6 +36,9 @@ export class SynapseOrchestrator {
 
   // User current agent: userId -> agent name (如 "_user_1", "claude", "openclaw")
   private userAgents: Map<string, string> = new Map();
+
+  // User selected model: userId -> model choice (如 "glm-4.7", "glm-5")
+  private userModels: Map<string, string> = new Map();
 
   // Predefined agent configurations
   private predefinedAgents: Map<string, AgentConfig> = new Map([
@@ -276,15 +279,15 @@ export class SynapseOrchestrator {
     // If user has no container, send quick start hint
     if (!state.containerInfo) {
       const hint = `
-**欢迎使用 OpenClaw**
+**欢迎使用 LingSynapse**
 
-快速开始：
-• !openclaw - 进入OpenClaw控制模式
-• 启动 - 启动沙箱容器
+检测到您当前无可用沙箱。
 
-帮助：
-• !openclaw help - 查看所有可用命令
-• !exit - 退出当前模式
+请使用命令选择模型：
+• !openclaw set model glm-4.7 - 启动 基础通用大模型 (GLM-4.7)
+• !openclaw set model glm-5 - 启动 深度推理大模型 (GLM-5)
+
+• !openclaw help - 查看更多命令
       `.trim();
       await sendFeishuMessage(userId, hint);
       return;
@@ -296,6 +299,42 @@ export class SynapseOrchestrator {
       userId,
       `收到消息: ${textContent}\n\n提示：使用 !${agentName} 进入${agentDisplay}模式与容器${containerName}交互。`
     );
+  }
+
+  /**
+   * Handle !agent set model command
+   */
+  private async handleSetModel(userId: string, agentName: string, modelChoice: string): Promise<void> {
+    const agentConfig = this.getAgentConfig(agentName);
+    const agentDisplay = agentConfig?.displayName || agentName;
+
+    // Validate model choice
+    const validModels = ['glm-4.7', 'glm-5'];
+    if (!validModels.includes(modelChoice)) {
+      await sendFeishuMessage(
+        userId,
+        `无效的模型选择: ${modelChoice}\n\n可用模型：\n• glm-4.7 - 基础通用大模型\n• glm-5 - 深度推理大模型\n\n示例：!${agentName} set model glm-4.7`
+      );
+      return;
+    }
+
+    // Set user's model choice
+    this.userModels.set(userId, modelChoice);
+    const modelInfo = modelChoice === 'glm-4.7' ? 'GLM-4.7 (基础通用大模型)' : 'GLM-5 (深度推理大模型)';
+
+    console.log(`[Orchestrator] User ${userId} set model to ${modelChoice}`);
+
+    await sendFeishuMessage(
+      userId,
+      `模型已设置为：${modelInfo}\n\n下次启动沙箱时将使用此模型。\n\n• !${agentName} start - 使用新模型启动容器\n• !${agentName} status - 查看当前状态`
+    );
+  }
+
+  /**
+   * Get user's selected model
+   */
+  private getUserModel(userId: string): string {
+    return this.userModels.get(userId) || 'glm-4.7'; // Default to GLM-4.7
   }
 
   /**
@@ -335,6 +374,14 @@ export class SynapseOrchestrator {
     const agentDisplay = agentConfig?.displayName || agentName;
 
     console.log(`[Orchestrator] Executing !${agentName} command: ${cmd}`);
+
+    // Handle "set model <model>" command
+    const setModelMatch = cmd.match(/^set\s+model\s+(\S+)/);
+    if (setModelMatch) {
+      const modelChoice = setModelMatch[1];
+      await this.handleSetModel(userId, agentName, modelChoice);
+      return;
+    }
 
     switch (cmd) {
       case 'status':
@@ -621,18 +668,17 @@ export class SynapseOrchestrator {
     const agentDisplay = agentConfig?.displayName || agentName;
     const containerPrefix = agentConfig?.containerPrefix || `${agentName}-sandbox-`;
     const containerName = `${containerPrefix}${userId}`;
+    const modelChoice = this.getUserModel(userId);
 
-    console.log(`[Orchestrator] Igniting ${agentDisplay} sandbox for user ${userId}`);
+    console.log(`[Orchestrator] Igniting ${agentDisplay} sandbox for user ${userId} with model ${modelChoice}`);
 
     try {
       const options: IgniteOptions = {
         userId,
         userToken: state.userToken,
+        modelChoice,
       };
 
-      // Update docker config to use correct prefix if needed
-      // For now, use the standard igniteSandbox which uses openclaw prefix
-      // TODO: Update docker-orchestrator to support custom container prefixes
       const containerInfo = await dockerOrchestrator.igniteSandbox(options);
       state.containerInfo = containerInfo;
       state.lastActivity = new Date();
@@ -640,9 +686,10 @@ export class SynapseOrchestrator {
       // Connect to container via WebSocket tunnel
       await wsTunnel.connectToContainer(userId, containerInfo.port);
 
+      const modelDisplay = modelChoice === 'glm-4.7' ? 'GLM-4.7' : 'GLM-5';
       await sendFeishuMessage(
         userId,
-        `沙箱启动成功！\n\n容器名称：${containerName}\n智能体：${agentDisplay}`
+        `沙箱启动成功！\n\n容器名称：${containerName}\n智能体：${agentDisplay}\n模型：${modelDisplay}`
       );
 
       console.log(`[Orchestrator] Sandbox ignited for user ${userId}: ${containerInfo.containerId}`);
@@ -852,22 +899,18 @@ export class SynapseOrchestrator {
     console.log(`[Orchestrator] Forwarding message to container ${state.containerInfo.containerId}`);
     console.log(`[Orchestrator] Message: ${message}`);
 
-    // Check if Node connection is registered and has active tunnel
-    if (!wsTunnel.hasActiveConnections(userId)) {
-      console.warn(`[Orchestrator] No active Node or container connection for user ${userId}`);
+    // Check if container connection is active (for Feishu message forwarding)
+    if (!wsTunnel.hasContainerConnection(userId)) {
+      console.warn(`[Orchestrator] No active container connection for user ${userId}`);
       await sendFeishuMessage(
         userId,
-        '无法转发消息：Node 或容器连接未激活。请确保您的 Node 客户端已连接。'
+        '无法转发消息：容器连接未激活。请等待容器启动完成。'
       );
       return;
     }
 
-    // Note: The actual message forwarding happens via ws-tunnel service
-    // when messages are received from Node WebSocket connection.
-    // This method is called for Feishu messages, which would need to be
-    // sent to Node client first, then forwarded to container.
-
-    console.log(`[Orchestrator] Message forwarding is handled via WebSocket tunnel between Node and container`);
+    // Send message directly to container via ws-tunnel
+    wsTunnel.sendToContainer(userId, message);
   }
 
   /**
