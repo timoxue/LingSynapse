@@ -1,5 +1,5 @@
 import { dockerOrchestrator } from './docker-orchestrator';
-import { sendFeishuMessage } from './feishu-client';
+import { sendFeishuMessage } from '../server';
 import { tokenService } from './token';
 import { wsTunnel } from './ws-tunnel';
 import { UserSandboxState, DockerContainerInfo, IgniteOptions, FeishuWSMessage } from '../types';
@@ -249,9 +249,62 @@ export class SynapseOrchestrator {
     const state = this.getUserState(userId);
     const containerPrefix = agentConfig?.containerPrefix || `${agentName}-sandbox-`;
     const containerName = `${containerPrefix}${userId}`;
-    const hasContainer = !!state.containerInfo;
+
+    // Check actual Docker container status (not just in-memory state)
+    let containerStatus = null;
+    try {
+      containerStatus = await dockerOrchestrator.getExistingContainerStatus(containerName);
+    } catch (error) {
+      console.error(`[Orchestrator] Error checking container status: ${error}`);
+    }
+
+    const hasContainer = containerStatus?.exists && (state.containerInfo || containerStatus.status === 'running');
 
     if (!hasContainer) {
+      // Try to find and reconnect to existing running container
+      if (containerStatus?.exists && containerStatus.status === 'running') {
+        console.log(`[Orchestrator] Found running container ${containerName}, connecting...`);
+        try {
+          // Create container info for running container
+          const container = containerStatus.container!;
+          const info = await container.inspect();
+
+          // Extract gateway token from container environment
+          let gatewayToken = '';
+          const envVars = info.Config?.Env || [];
+          const tokenEnv = envVars.find((env: string) => env.startsWith('OPENCLAW_GATEWAY_TOKEN='));
+          if (tokenEnv) {
+            gatewayToken = tokenEnv.split('=')[1] || '';
+            console.log(`[Orchestrator] Extracted gateway token from container ${containerName}`);
+          }
+
+          state.containerInfo = {
+            containerId: container.id || info.Id,
+            userId,
+            userToken: '',
+            gatewayToken,
+            port: 18789,
+            status: 'running',
+            createdAt: new Date(info.Created),
+          };
+
+          // Connect to container WebSocket with token
+          await wsTunnel.connectToContainer(userId, 18789, gatewayToken);
+
+          await sendFeishuMessage(
+            userId,
+            `✅ 已连接到运行中的容器 ${containerName}`
+          );
+        } catch (error) {
+          console.error(`[Orchestrator] Failed to connect to existing container: ${error}`);
+          await sendFeishuMessage(
+            userId,
+            `容器${containerName}连接失败。请使用 !${agentName} restart 重启容器。`
+          );
+        }
+        return;
+      }
+
       await sendFeishuMessage(
         userId,
         `容器${containerName}未运行。请先使用 !${agentName} status 查看状态，或 !${agentName} start/restart 启动容器。`
@@ -462,7 +515,7 @@ export class SynapseOrchestrator {
       this.getUserState(userId).containerInfo = containerInfo;
 
       // Connect to container via WebSocket tunnel
-      await wsTunnel.connectToContainer(userId, containerInfo.port);
+      await wsTunnel.connectToContainer(userId, containerInfo.port, containerInfo.gatewayToken);
 
       await sendFeishuMessage(
         userId,
@@ -535,7 +588,57 @@ export class SynapseOrchestrator {
     const containerPrefix = agentConfig?.containerPrefix || `${agentName}-sandbox-`;
     const containerName = `${containerPrefix}${userId}`;
     const state = this.getUserState(userId);
-    const status = state.containerInfo ? state.containerInfo.status : 'not_started';
+
+    console.log(`[Orchestrator] sendAgentMenu: checking container ${containerName}`);
+
+    // Check actual Docker container status
+    let status = 'not_started';
+    try {
+      const containerStatus = await dockerOrchestrator.getExistingContainerStatus(containerName);
+      console.log(`[Orchestrator] Container status check result: exists=${containerStatus.exists}, status=${containerStatus.status}`);
+      if (containerStatus.exists) {
+        status = containerStatus.status;
+        // Update state if container is running
+        if (status === 'running' && (!state.containerInfo || state.containerInfo.status !== 'running')) {
+          const container = containerStatus.container!;
+          const info = await container.inspect();
+
+          // Extract gateway token from container environment
+          let gatewayToken = '';
+          const envVars = info.Config?.Env || [];
+          const tokenEnv = envVars.find((env: string) => env.startsWith('OPENCLAW_GATEWAY_TOKEN='));
+          if (tokenEnv) {
+            gatewayToken = tokenEnv.split('=')[1] || '';
+            console.log(`[Orchestrator] Extracted gateway token from container ${containerName}`);
+          }
+
+          state.containerInfo = {
+            containerId: container.id || info.Id,
+            userId,
+            userToken: '',
+            gatewayToken,
+            port: 18789,
+            status: 'running',
+            createdAt: new Date(info.Created),
+          };
+
+          // Try to connect to container WebSocket with token
+          try {
+            await wsTunnel.connectToContainer(userId, 18789, gatewayToken);
+            console.log(`[Orchestrator] Connected to container ${containerName} for user ${userId}`);
+          } catch (error) {
+            console.error(`[Orchestrator] Failed to connect to container: ${error}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`[Orchestrator] Error checking container status: ${error}`);
+    }
+
+    // Fallback to in-memory state if check failed
+    if (status === 'not_started' && state.containerInfo) {
+      status = state.containerInfo.status;
+    }
 
     await sendFeishuMessage(
       userId,
@@ -597,7 +700,7 @@ export class SynapseOrchestrator {
       state.lastActivity = new Date();
 
       // Connect to container via WebSocket tunnel
-      await wsTunnel.connectToContainer(userId, containerInfo.port);
+      await wsTunnel.connectToContainer(userId, containerInfo.port, containerInfo.gatewayToken);
 
       const containerName = `openclaw-sandbox-${userId}`;
       await sendFeishuMessage(
@@ -638,7 +741,7 @@ export class SynapseOrchestrator {
       state.lastActivity = new Date();
 
       // Connect to container via WebSocket tunnel
-      await wsTunnel.connectToContainer(userId, containerInfo.port);
+      await wsTunnel.connectToContainer(userId, containerInfo.port, containerInfo.gatewayToken);
 
       await sendFeishuMessage(
         userId,
@@ -852,22 +955,19 @@ export class SynapseOrchestrator {
     console.log(`[Orchestrator] Forwarding message to container ${state.containerInfo.containerId}`);
     console.log(`[Orchestrator] Message: ${message}`);
 
-    // Check if Node connection is registered and has active tunnel
+    // Check if container connection is active
     if (!wsTunnel.hasActiveConnections(userId)) {
-      console.warn(`[Orchestrator] No active Node or container connection for user ${userId}`);
+      console.warn(`[Orchestrator] No active container connection for user ${userId}`);
       await sendFeishuMessage(
         userId,
-        '无法转发消息：Node 或容器连接未激活。请确保您的 Node 客户端已连接。'
+        '容器连接未激活。请稍后重试。'
       );
       return;
     }
 
-    // Note: The actual message forwarding happens via ws-tunnel service
-    // when messages are received from Node WebSocket connection.
-    // This method is called for Feishu messages, which would need to be
-    // sent to Node client first, then forwarded to container.
-
-    console.log(`[Orchestrator] Message forwarding is handled via WebSocket tunnel between Node and container`);
+    // Send message directly to container via Gateway protocol
+    await wsTunnel.sendChatMessage(userId, message);
+    console.log(`[Orchestrator] Message sent to container for user ${userId}`);
   }
 
   /**

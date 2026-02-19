@@ -90,9 +90,10 @@ export class WSTunnelService {
    *
    * @param userId - User identifier
    * @param containerPort - Port of Docker container (unused when connecting via container name)
+   * @param gatewayToken - Gateway authentication token (optional)
    * @returns Promise that resolves when connection is established
    */
-  async connectToContainer(userId: string, containerPort: number): Promise<void> {
+  async connectToContainer(userId: string, containerPort: number, gatewayToken?: string): Promise<void> {
     // Close existing container connection if any
     const existingConnection = this.containerConnections.get(userId);
     if (existingConnection && existingConnection.readyState === WebSocket.OPEN) {
@@ -129,7 +130,7 @@ export class WSTunnelService {
 
       // Step 2: Try WebSocket connection
       try {
-        await this.tryConnect(userId, containerName, containerUrl);
+        await this.tryConnect(userId, containerName, containerUrl, gatewayToken);
         console.log(`[WSTunnel] Successfully connected to container for user ${userId}`);
         return;
       } catch (error: any) {
@@ -147,22 +148,32 @@ export class WSTunnelService {
   }
 
   /**
-   * Try to connect to container WebSocket
+   * Try to connect to container WebSocket with Gateway handshake
    */
-  private tryConnect(userId: string, containerName: string, containerUrl: string): Promise<void> {
+  private tryConnect(userId: string, containerName: string, containerUrl: string, gatewayToken?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const containerWs = new WebSocket(containerUrl);
 
-      // Set connection timeout
+      // Set connection timeout (longer for handshake)
       const timeout = setTimeout(() => {
         containerWs.terminate();
         reject(new Error('Connection timeout'));
-      }, 5000); // 5 second timeout
+      }, 15000); // 15 second timeout
 
-      // Handle connection open
+      // Store gateway token for use in message handler
+      (containerWs as any).gatewayToken = gatewayToken;
+      (containerWs as any).userId = userId;
+
+      // Handle connection open - wait for Gateway challenge
       containerWs.on('open', () => {
         clearTimeout(timeout);
-        console.log(`[WSTunnel] Connected to container for user ${userId}`);
+        console.log(`[WSTunnel] Connected to container for user ${userId}, waiting for Gateway challenge`);
+
+        // Store gateway token and userId on ws object for later use
+        (containerWs as any).gatewayToken = gatewayToken;
+        (containerWs as any).userId = userId;
+
+        // Add to connections map BEFORE setting up message handler
         this.containerConnections.set(userId, containerWs);
 
         // Set up message handler for container connection
@@ -176,6 +187,7 @@ export class WSTunnelService {
           this.containerConnections.delete(userId);
         });
 
+        // Resolve immediately
         resolve();
       });
 
@@ -212,12 +224,133 @@ export class WSTunnelService {
   }
 
   /**
+   * Send a chat message directly to the container
+   * This is used when messages come from Feishu (instead of Node client)
+   *
+   * @param userId - User identifier
+   * @param text - Message text to send
+   */
+  async sendChatMessage(userId: string, text: string): Promise<void> {
+    const containerWs = this.containerConnections.get(userId);
+
+    if (!containerWs || containerWs.readyState !== WebSocket.OPEN) {
+      console.warn(`[WSTunnel] No active container connection for user ${userId}, cannot send message`);
+      return;
+    }
+
+    // Check if handshake is complete
+    if (!(containerWs as any).handshakeComplete) {
+      console.warn(`[WSTunnel] Handshake not complete for user ${userId}, cannot send message`);
+      return;
+    }
+
+    try {
+      // Send Gateway chat request
+      const chatRequest = {
+        type: 'req',
+        id: Date.now(),
+        method: 'chat',
+        params: {
+          message: text,
+        },
+      };
+
+      containerWs.send(JSON.stringify(chatRequest));
+      console.log(`[WSTunnel] Sent chat message to container for user ${userId}: ${text}`);
+    } catch (error) {
+      console.error(`[WSTunnel] Error sending chat message to container for user ${userId}:`, error);
+    }
+  }
+
+  /**
    * Handle messages from container and forward to Node client
    *
    * @param userId - User identifier
    * @param data - Message data from container
    */
   private handleContainerMessage(userId: string, data: WebSocket.Data): void {
+    const containerWs = this.containerConnections.get(userId);
+
+    if (!containerWs) {
+      console.warn(`[WSTunnel] No container connection for user ${userId}`);
+      return;
+    }
+
+    try {
+      const messageStr = data.toString();
+      const message = JSON.parse(messageStr);
+
+      console.log(`[WSTunnel] Received message from container for user ${userId}:`, message.type);
+
+      // Handle connect.challenge event - Gateway sends this first
+      if (message.type === 'event' && message.event === 'connect.challenge') {
+        console.log(`[WSTunnel] Received connect.challenge, sending connect response`);
+
+        // Send Gateway connect response
+        const gatewayToken = (containerWs as any).gatewayToken;
+        const connectRequest: any = {
+          type: 'req',
+          id: `connect_${Date.now()}`,
+          method: 'connect',
+          params: {
+            minProtocol: 3,
+            maxProtocol: 3,
+            client: {
+              id: 'cli',
+              version: '1.2.3',
+              platform: 'macos',
+              mode: 'cli'
+            },
+            role: 'operator',
+            scopes: ['operator.read', 'operator.write'],
+            caps: [],
+            commands: [],
+            permissions: {},
+            locale: 'en-US',
+            userAgent: `lingsynapse-relay/1.0.0`
+          },
+        };
+
+        // Add token if available - use auth object
+        if (gatewayToken) {
+          connectRequest.params.auth = { token: gatewayToken };
+          console.log(`[WSTunnel] Using gateway token for connection`);
+        }
+
+        containerWs.send(JSON.stringify(connectRequest));
+        console.log(`[WSTunnel] Sent Gateway connect response for user ${userId}`);
+        return;
+      }
+
+      // Handle hello-ok event - handshake complete
+      if (message.type === 'res' && message.ok === true && message.payload?.type === 'hello-ok') {
+        console.log(`[WSTunnel] Gateway handshake complete for user ${userId} (hello-ok)`);
+        (containerWs as any).handshakeComplete = true;
+        return;
+      }
+
+      // Handle error responses
+      if (message.type === 'res' && message.ok === false) {
+        console.error(`[WSTunnel] Gateway error for user ${userId}:`, message.error?.message);
+        return;
+      }
+
+      // Handle chat response
+      if (message.type === 'res' && message.method === 'chat') {
+        const text = message.result?.text || message.result?.content || '';
+        if (text) {
+          // Send to Feishu via orchestrator
+          console.log(`[WSTunnel] Chat response for user ${userId}: ${text}`);
+          // TODO: Send to Feishu message callback
+        }
+        return;
+      }
+
+    } catch (error) {
+      console.error(`[WSTunnel] Error parsing container message for user ${userId}:`, error);
+    }
+
+    // Original: Forward to Node client (if exists)
     const nodeWs = this.nodeConnections.get(userId);
 
     if (!nodeWs || nodeWs.readyState !== WebSocket.OPEN) {
@@ -281,16 +414,11 @@ export class WSTunnelService {
    * Check if user has active connections
    *
    * @param userId - User identifier
-   * @returns True if user has both Node and container connections
+   * @returns True if user has active container connection
    */
   hasActiveConnections(userId: string): boolean {
-    const nodeWs = this.nodeConnections.get(userId);
     const containerWs = this.containerConnections.get(userId);
-
-    return (
-      nodeWs?.readyState === WebSocket.OPEN &&
-      containerWs?.readyState === WebSocket.OPEN
-    );
+    return containerWs?.readyState === WebSocket.OPEN;
   }
 
   /**
