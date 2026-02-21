@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { feishuOAuth } from './services/feishu-oauth';
 import { orchestrator } from './services/orchestrator';
+import { proxyRequestService } from './services/proxy-request';
 import authRoutes from './routes/auth';
 import configRoutes from './routes/config';
 import feishuRoutes from './routes/feishu';
@@ -140,6 +141,15 @@ async function initializeOrchestrator() {
         console.log('Event:', JSON.stringify(data, null, 2));
         console.log('=========================\n');
         // Handle menu/button clicks if needed
+      },
+      'p2_card_action_trigger': async (data: any) => {
+        console.log('\n=== CARD ACTION EVENT ===');
+        console.log('Event:', JSON.stringify(data, null, 2));
+        console.log('=========================\n');
+
+        const response = await proxyRequestService.handleCardAction(data);
+        console.log('[Server] Card action response:', response);
+        return response;
       },
     });
 
