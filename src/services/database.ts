@@ -66,12 +66,35 @@ db.exec(`
   )
 `);
 
+// 创建代理请求表
+db.exec(`
+  CREATE TABLE IF NOT EXISTS proxy_requests (
+    id TEXT PRIMARY KEY,
+    requestor_user_id TEXT NOT NULL,
+    target_user_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL DEFAULT 'openclaw',
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    result TEXT,
+    card_message_id TEXT
+  )
+`);
+
 // 创建索引
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_users_feishu_id ON users(feishu_user_id);
   CREATE INDEX IF NOT EXISTS idx_users_token ON users(token);
   CREATE INDEX IF NOT EXISTS idx_sessions_ws_id ON sessions(ws_id);
   CREATE INDEX IF NOT EXISTS idx_config_key ON config(key);
+  CREATE INDEX IF NOT EXISTS idx_proxy_target_status
+  ON proxy_requests(target_user_id, status);
+  CREATE INDEX IF NOT EXISTS idx_proxy_requestor_status
+  ON proxy_requests(requestor_user_id, status);
+  CREATE INDEX IF NOT EXISTS idx_proxy_expires
+  ON proxy_requests(expires_at);
 `);
 
 // 暴露数据库实例
@@ -242,6 +265,126 @@ export const database = {
   deleteConfig: (key: string): void => {
     const stmt = db.prepare('DELETE FROM config WHERE key = ?');
     stmt.run(key);
+  },
+
+  // Proxy request operations
+  createProxyRequest: (data: {
+    id: string;
+    requestorUserId: string;
+    targetUserId: string;
+    agentName: string;
+    message: string;
+    expiresAt: number;
+  }): void => {
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = db.prepare(`
+      INSERT INTO proxy_requests (
+        id, requestor_user_id, target_user_id, agent_name,
+        message, status, created_at, updated_at, expires_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      data.id,
+      data.requestorUserId,
+      data.targetUserId,
+      data.agentName,
+      data.message,
+      'pending',
+      now,
+      now,
+      data.expiresAt
+    );
+  },
+
+  getProxyRequest: (id: string): Record<string, any> | undefined => {
+    const stmt = db.prepare('SELECT * FROM proxy_requests WHERE id = ?');
+    const row = stmt.get(id) as any;
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      requestorUserId: row.requestor_user_id,
+      targetUserId: row.target_user_id,
+      agentName: row.agent_name,
+      message: row.message,
+      status: row.status,
+      createdAt: new Date((row.created_at as number) * 1000),
+      updatedAt: new Date((row.updated_at as number) * 1000),
+      expiresAt: new Date((row.expires_at as number) * 1000),
+      result: row.result,
+      cardMessageId: row.card_message_id,
+    };
+  },
+
+  updateProxyRequest: (
+    id: string,
+    updates: Partial<{
+      status: string;
+      result: string;
+      cardMessageId: string;
+    }>
+  ): boolean => {
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (updates.status !== undefined) {
+      fields.push('status = ?');
+      values.push(updates.status);
+    }
+    if (updates.result !== undefined) {
+      fields.push('result = ?');
+      values.push(updates.result);
+    }
+    if (updates.cardMessageId !== undefined) {
+      fields.push('card_message_id = ?');
+      values.push(updates.cardMessageId);
+    }
+
+    if (fields.length === 0) return false;
+
+    fields.push('updated_at = ?');
+    values.push(Math.floor(Date.now() / 1000));
+    values.push(id);
+
+    const stmt = db.prepare(`
+      UPDATE proxy_requests
+      SET ${fields.join(', ')}
+      WHERE id = ?
+    `);
+
+    const result = stmt.run(...values);
+    return result.changes > 0;
+  },
+
+  getPendingRequests: (targetUserId: string): Record<string, any>[] => {
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = db.prepare(`
+      SELECT * FROM proxy_requests
+      WHERE target_user_id = ? AND status = 'pending' AND expires_at > ?
+      ORDER BY created_at DESC
+    `);
+    return stmt.all(targetUserId, now) as Record<string, any>[];
+  },
+
+  getUserRequests: (requestorUserId: string): Record<string, any>[] => {
+    const stmt = db.prepare(`
+      SELECT * FROM proxy_requests
+      WHERE requestor_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT 10
+    `);
+    return stmt.all(requestorUserId) as Record<string, any>[];
+  },
+
+  cancelProxyRequest: (id: string, requestorUserId: string): boolean => {
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = db.prepare(`
+      UPDATE proxy_requests
+      SET status = 'cancelled', updated_at = ?
+      WHERE id = ? AND requestor_user_id = ? AND status = 'pending'
+    `);
+    const result = stmt.run(now, id, requestorUserId);
+    return result.changes > 0;
   },
 };
 
