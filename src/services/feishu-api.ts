@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { database } from './database';
+import type { FeishuCard } from '../types/proxy-request';
 
 const FEISHU_APP_ID = process.env.FEISHU_APP_ID || '';
 const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || '';
@@ -261,6 +262,104 @@ export class FeishuAPI {
     // TODO: 实现飞书 webhook 验证逻辑
     // 参考: https://open.feishu.cn/document/common-capabilities/message-card/message-card-content-language/using-verification-token-to-verify-event-request
     return true;
+  }
+
+  // 发送卡片消息
+  async sendCardMessage(userId: string, card: FeishuCard): Promise<string | null> {
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        const token = await this.getAccessToken(attempt > 0);
+
+        const response = await this.client.post<FeishuMessageResponse>(
+          `/open-apis/im/v1/messages?receive_id_type=user_id`,
+          {
+            receive_id: userId,
+            msg_type: 'interactive',
+            content: JSON.stringify(card),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (response.data.code === 0) {
+          const messageId = (response.data as any).data?.message_id;
+          console.log(`[FeishuAPI] Card sent successfully, message_id: ${messageId}`);
+          return messageId;
+        } else {
+          console.error(`[FeishuAPI] Send card failed: code=${response.data.code}, msg=${response.data.msg}`);
+          return null;
+        }
+      } catch (error) {
+        const axiosError = error as AxiosError;
+        const statusCode = axiosError.response?.status;
+        const errorCode = (axiosError.response?.data as any)?.code;
+
+        if (statusCode === 401 || statusCode === 403 || errorCode === 99991668) {
+          if (attempt < 2) {
+            this.inMemoryToken = null;
+            database.deleteConfig(TOKEN_CONFIG_KEY);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+          }
+        }
+
+        console.error('[FeishuAPI] Failed to send card:', axiosError.message);
+        throw error;
+      }
+    }
+
+    return null;
+  }
+
+  // 更新卡片消息
+  async updateCardMessage(messageId: string, card: FeishuCard): Promise<boolean> {
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        const token = await this.getAccessToken(attempt > 0);
+
+        const response = await this.client.request<FeishuMessageResponse>({
+          method: 'PUT',
+          url: `/open-apis/im/v1/messages/${messageId}`,
+          params: { receive_id_type: 'user_id' },
+          data: {
+            content: JSON.stringify(card),
+            msg_type: 'interactive',
+          },
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.data.code === 0) {
+          console.log(`[FeishuAPI] Card updated successfully: ${messageId}`);
+          return true;
+        } else {
+          console.error(`[FeishuAPI] Update card failed: code=${response.data.code}, msg=${response.data.msg}`);
+          return false;
+        }
+      } catch (error) {
+        const axiosError = error as AxiosError;
+        const statusCode = axiosError.response?.status;
+        const errorCode = (axiosError.response?.data as any)?.code;
+
+        if (statusCode === 401 || statusCode === 403 || errorCode === 99991668) {
+          if (attempt < 2) {
+            this.inMemoryToken = null;
+            database.deleteConfig(TOKEN_CONFIG_KEY);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+          }
+        }
+
+        console.error('[FeishuAPI] Failed to update card:', axiosError.message);
+        throw error;
+      }
+    }
+
+    return false;
   }
 }
 
