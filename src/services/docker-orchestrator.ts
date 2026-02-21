@@ -1,7 +1,8 @@
 import Docker from 'dockerode';
 import { randomBytes } from 'crypto';
 import { execSync } from 'child_process';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import path from 'path';
 import dockerConfig from '../../config/docker.json';
 import { DockerContainerInfo, IgniteOptions } from '../types';
 import { createLogger } from '../utils/logger';
@@ -39,26 +40,71 @@ export class DockerOrchestrator {
    * 2. Sidecar container: openclaw-proxy-${safeId} - shares network namespace, proxies 38789 -> 127.0.0.1:18789
    */
   async igniteSandbox(options: IgniteOptions): Promise<DockerContainerInfo> {
-    const { userId, userToken, storagePath } = options;
+    const { userId, userToken } = options;
     const gatewayToken = this.generateGatewayToken();
     const safeId = this.sanitizeUserId(userId);
     const mainContainerName = `${dockerConfig.containerPrefix}${safeId}`;
     const proxyContainerName = `${dockerConfig.containerPrefix}${safeId}${PROXY_CONTAINER_SUFFIX}`;
-    const hostStoragePath = storagePath || dockerConfig.storagePath.replace('{userId}', userId);
+    // 初始化路径：容器内使用 /app/sandbox-data，但 Binds 参数使用宿主机物理路径
+    const CONTAINER_SANDBOX_PATH = `/app/sandbox-data/${userId}`;
+    const HOST_PATH = `/Users/timo/LingSynapse/sandbox-data/${userId}`;
 
-    // Config file path for openclaw.json - use absolute path
-    const hostConfigPath = `/Users/timo/LingSynapse/sandbox-data/${userId}/openclaw.json`;
-
-    // Ensure storage directory exists and set permissions for container node user
+    // ==================== 初始化宿主机路径 ====================
     try {
-      if (!existsSync(hostStoragePath)) {
-        mkdirSync(hostStoragePath, { recursive: true });
+      // 动作：如果不存在，则 mkdir -p（使用容器内路径）
+      if (!existsSync(CONTAINER_SANDBOX_PATH)) {
+        mkdirSync(CONTAINER_SANDBOX_PATH, { recursive: true });
+        logger.info(`Created HOST_PATH: ${CONTAINER_SANDBOX_PATH}`);
       }
-      // Set 777 permissions so container's node user can write
-      execSync(`chmod -R 777 ${hostStoragePath}`);
-      logger.info(`Permissions set to 777 for ${hostStoragePath}`);
+
+      // 权限：立即执行 chmod 777（必须在写文件前，确保后续容器能写回）
+      execSync(`chmod 777 ${CONTAINER_SANDBOX_PATH}`);
+      logger.info(`Set chmod 777 on HOST_PATH: ${CONTAINER_SANDBOX_PATH}`);
+
+      // ==================== 预注入核心配置 ====================
+      // 注意：容器内 sandbox-data 挂载在 /app/sandbox-data
+      // fs 操作使用容器内路径，但 Binds 参数使用宿主机物理路径
+      const templateDir = '/app/sandbox-data/template';
+
+      // 从 template 拷贝 openclaw.json 到 ${CONTAINER_SANDBOX_PATH}/openclaw.json
+      const hostConfigPath = `${CONTAINER_SANDBOX_PATH}/openclaw.json`;
+      if (!existsSync(hostConfigPath)) {
+        const templateConfigPath = `${templateDir}/openclaw.json`;
+        try {
+          writeFileSync(hostConfigPath, readFileSync(templateConfigPath));
+          logger.info(`Copied openclaw.json from template to ${hostConfigPath}`);
+        } catch (e) {
+          logger.warning(`Failed to copy openclaw.json: ${e}`);
+        }
+      } else {
+        logger.debug(`openclaw.json already exists, skipping copy`);
+      }
+
+      // 递归创建 ${CONTAINER_SANDBOX_PATH}/agents/main/agent/，复制 auth-profiles.json 到目录下
+      const hostAgentDir = `${CONTAINER_SANDBOX_PATH}/agents/main/agent`;
+      if (!existsSync(hostAgentDir)) {
+        mkdirSync(hostAgentDir, { recursive: true });
+        logger.info(`Created agent directory: ${hostAgentDir}`);
+      }
+
+      const hostAuthProfilesPath = `${hostAgentDir}/auth-profiles.json`;
+      if (!existsSync(hostAuthProfilesPath)) {
+        const templateAuthProfilesPath = `${templateDir}/auth-profiles.json`;
+        try {
+          writeFileSync(hostAuthProfilesPath, readFileSync(templateAuthProfilesPath));
+          logger.info(`Copied auth-profiles.json from template to ${hostAuthProfilesPath}`);
+        } catch (e) {
+          logger.warning(`Failed to copy auth-profiles.json: ${e}`);
+        }
+      } else {
+        logger.debug(`auth-profiles.json already exists, skipping copy`);
+      }
+
+      // 确保 agent 目录也有写权限
+      execSync(`chmod -R 777 ${CONTAINER_SANDBOX_PATH}`);
+      logger.info(`Set chmod -R 777 on HOST_PATH: ${CONTAINER_SANDBOX_PATH}`);
     } catch (e) {
-      logger.warning(`Failed to set permissions: ${e}`);
+      logger.warning(`Failed to setup user config: ${e}`);
     }
 
     logger.info(`Igniting sandbox for user ${userId}...`);
@@ -99,8 +145,9 @@ export class DockerOrchestrator {
         ],
         HostConfig: {
           NetworkMode: dockerConfig.network,
+          // 全量挂载启动：Binds: [ "${HOST_PATH}:/home/node/.openclaw:rw" ]
           Binds: [
-            `${hostStoragePath}:/home/node/.openclaw:rw`
+            `${HOST_PATH}:/home/node/.openclaw:rw`
           ],
           AutoRemove: dockerConfig.autoRemove,
           // ABSOLUTELY NO PortBindings - no host port exposure

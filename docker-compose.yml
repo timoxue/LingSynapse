@@ -36,6 +36,7 @@ services:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket access
       - /Users/timo/.openclaw:/root/.openclaw  # OpenClaw storage
+      - ./sandbox-data:/app/sandbox-data  # Sandbox data templates and storage
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5178/health"]
