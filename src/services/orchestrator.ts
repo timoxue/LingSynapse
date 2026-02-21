@@ -149,6 +149,7 @@ export class SynapseOrchestrator {
       'restart': () => this.restartContainer(userId, agentName),
       'rebuild': () => this.rebuildContainer(userId),
       'help': () => this.sendHelp(userId, agentName),
+      'instructions': () => this.sendInstructions(userId, agentName),
     };
 
     // Proxy request commands
@@ -352,6 +353,7 @@ export class SynapseOrchestrator {
       `• !${agentName} stop - 停止\n` +
       `• !${agentName} restart - 重启\n` +
       `• !${agentName} rebuild - 重建\n` +
+      `• !${agentName} instructions - 查看使用说明\n` +
       `• !${agentName} request status - 查看发起的请求\n` +
       `• !${agentName} request list - 查看待处理请求\n` +
       `• !${agentName} request cancel <id> - 取消请求\n` +
@@ -359,6 +361,23 @@ export class SynapseOrchestrator {
       `• !exit - 退出\n\n` +
       `代理请求格式: @user !${agentName} <消息>`;
     await sendFeishuMessage(userId, help);
+  }
+
+  private async sendInstructions(userId: string, agentName: string): Promise<void> {
+    const config = PREDEFINED_AGENTS.get(agentName);
+    const instructions = `**${config?.displayName || agentName} 使用说明**\n\n` +
+      `**基本使用**\n` +
+      `1. 使用 \`!${agentName} start\` 启动容器\n` +
+      `2. 使用 \`!${agentName} <消息>\` 与智能体对话\n` +
+      `3. 使用 \`!exit\` 退出交互模式\n\n` +
+      `**代理请求**\n` +
+      `可以使用 @user !${agentName} <消息> 向其他用户发起智能体调用请求\n` +
+      `对方需要同意后才会执行\n\n` +
+      `**常用命令**\n` +
+      `• !${agentName} status - 查看容器状态\n` +
+      `• !${agentName} restart - 重启容器\n` +
+      `• !${agentName} rebuild - 完全重建容器`;
+    await sendFeishuMessage(userId, instructions);
   }
 
   private async handleProxyRequestCommand(userId: string, agentName: string, command: string): Promise<void> {
@@ -444,6 +463,8 @@ export class SynapseOrchestrator {
       `快速开始:\n` +
       `• !openclaw start - 启动容器\n` +
       `• !openclaw help - 查看帮助\n` +
+      `• !openclaw instructions - 查看使用说明\n` +
+      `• @user !openclaw <消息> - 代理请求\n` +
       `• !exit - 退出`;
   }
 
