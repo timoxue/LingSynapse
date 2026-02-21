@@ -2,8 +2,10 @@ import { dockerOrchestrator } from './docker-orchestrator';
 import { feishuAPI } from './feishu-api';
 import { tokenService } from './token';
 import { wsTunnel } from './ws-tunnel';
+import { proxyRequestService } from './proxy-request';
 import { UserSandboxState, DockerContainerInfo, IgniteOptions, FeishuWSMessage } from '../types';
 import { waitForPort } from '../utils/network';
+import { parseProxyCommand } from '../utils/text-utils';
 
 // ============================================================================
 // Types
@@ -149,6 +151,12 @@ export class SynapseOrchestrator {
       'help': () => this.sendHelp(userId, agentName),
     };
 
+    // Proxy request commands
+    if (command.startsWith('request ')) {
+      await this.handleProxyRequestCommand(userId, agentName, command);
+      return;
+    }
+
     const handler = handlers[command];
     if (handler) {
       await handler();
@@ -176,6 +184,19 @@ export class SynapseOrchestrator {
 
   private async handleDefaultMode(userId: string, text: string): Promise<void> {
     const state = this.getUserState(userId);
+
+    // Check for proxy request format: @user !openclaw message
+    const proxyCmd = parseProxyCommand(text);
+    if (proxyCmd.targetUser && proxyCmd.command === 'openclaw') {
+      await proxyRequestService.createRequest(
+        userId,
+        proxyCmd.targetUser,
+        'openclaw',
+        proxyCmd.message
+      );
+      return;
+    }
+
     if (!state.containerInfo) {
       const hint = this.getWelcomeHint();
       await sendFeishuMessage(userId, hint);
@@ -331,9 +352,91 @@ export class SynapseOrchestrator {
       `• !${agentName} stop - 停止\n` +
       `• !${agentName} restart - 重启\n` +
       `• !${agentName} rebuild - 重建\n` +
+      `• !${agentName} request status - 查看发起的请求\n` +
+      `• !${agentName} request list - 查看待处理请求\n` +
+      `• !${agentName} request cancel <id> - 取消请求\n` +
       `• !${agentName} help - 帮助\n` +
-      `• !exit - 退出`;
+      `• !exit - 退出\n\n` +
+      `代理请求格式: @user !${agentName} <消息>`;
     await sendFeishuMessage(userId, help);
+  }
+
+  private async handleProxyRequestCommand(userId: string, agentName: string, command: string): Promise<void> {
+    const parts = command.split(' ');
+    const subCommand = parts[1];
+
+    const handlers: Record<string, () => Promise<void>> = {
+      'status': () => this.showProxyStatus(userId),
+      'list': () => this.showProxyList(userId),
+      'cancel': () => this.cancelProxyRequest(userId, parts.slice(2).join(' ')),
+    };
+
+    const handler = handlers[subCommand];
+    if (handler) {
+      await handler();
+    } else {
+      await sendFeishuMessage(
+        userId,
+        `**代理请求命令**\n• !${agentName} request status - 查看发起的请求\n• !${agentName} request list - 查看待处理请求\n• !${agentName} request cancel <id> - 取消请求`
+      );
+    }
+  }
+
+  private async showProxyStatus(userId: string): Promise<void> {
+    const requests = proxyRequestService.getUserRequests(userId);
+    if (requests.length === 0) {
+      await sendFeishuMessage(userId, '您没有发起任何请求');
+      return;
+    }
+
+    const statusEmojis: Record<string, string> = {
+      'pending': '⏳',
+      'approved': '✅',
+      'rejected': '❌',
+      'cancelled': '🚫',
+      'expired': '⌛',
+    };
+
+    let message = '**您的代理请求**\n\n';
+    for (const req of requests) {
+      const statusEmoji = statusEmojis[req.status as string] || '❓';
+
+      message += `${statusEmoji} \`${req.id.substring(0, 8)}...\` - ${req.status}\n`;
+      message += `   消息: ${req.message}\n\n`;
+    }
+
+    await sendFeishuMessage(userId, message);
+  }
+
+  private async showProxyList(userId: string): Promise<void> {
+    const requests = proxyRequestService.getPendingRequests(userId);
+    if (requests.length === 0) {
+      await sendFeishuMessage(userId, '您没有待处理的请求');
+      return;
+    }
+
+    let message = '**待处理的请求**\n\n';
+    for (const req of requests) {
+      message += `• 来自 @${req.requestorUserId}\n`;
+      message += `  消息: ${req.message}\n`;
+      message += `  ID: \`${req.id}\`\n\n`;
+    }
+
+    await sendFeishuMessage(userId, message);
+  }
+
+  private async cancelProxyRequest(userId: string, requestId: string): Promise<void> {
+    if (!requestId) {
+      await sendFeishuMessage(userId, '请提供请求ID');
+      return;
+    }
+
+    const success = await proxyRequestService.cancelRequest(requestId, userId);
+    if (success) {
+      await sendFeishuMessage(userId, '请求已取消');
+    } else {
+      await sendFeishuMessage(userId, '取消失败，请求不存在或已处理');
+    }
   }
 
   private getWelcomeHint(): string {
