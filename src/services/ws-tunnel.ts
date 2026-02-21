@@ -543,6 +543,27 @@ export class WSTunnelService {
           if (message.event === 'connect.challenge') {
             console.log(`[WSTunnel] Received connect challenge for user ${userId}`);
             // Handled by waitForConnectChallenge
+          } else if (message.event === 'chat') {
+            // Handle chat completion events
+            if (message.payload?.state === 'final' && message.payload?.message) {
+              const msg = message.payload.message;
+              if (msg.content && Array.isArray(msg.content) && msg.content.length > 0) {
+                // Build message from content blocks
+                let text = '';
+                for (const block of msg.content) {
+                  if (block.type === 'text') {
+                    text += block.text;
+                  } else if (block.type === 'tool_use') {
+                    text += `\n[使用工具: ${block.name}]`;
+                  } else if (block.type === 'tool_result') {
+                    text += `\n[工具结果]`;
+                  }
+                }
+                if (text) {
+                  this.sendToFeishu(userId, text);
+                }
+              }
+            }
           } else if (message.event === 'agent') {
             // Handle agent events including errors
             if (message.payload?.stream === 'lifecycle' && message.payload?.data?.phase === 'error') {
