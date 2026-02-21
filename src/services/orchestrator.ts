@@ -239,21 +239,11 @@ export class SynapseOrchestrator {
 
   private async rebuildContainer(userId: string): Promise<void> {
     const agentName = this.getUserAgent(userId) || 'openclaw';
-    const config = PREDEFINED_AGENTS.get(agentName);
-    const containerName = `${config?.containerPrefix || 'sandbox-'}${userId}`;
 
     wsTunnel.disconnectAll(userId);
 
-    const existingStatus = await dockerOrchestrator.getExistingContainerStatus(containerName);
-    if (existingStatus.exists && existingStatus.container) {
-      try {
-        await existingStatus.container.stop({ t: 10 });
-        await existingStatus.container.remove();
-        console.log(`[Orchestrator] Removed ${containerName}`);
-      } catch (e) {
-        console.error(`[Orchestrator] Remove error: ${e}`);
-      }
-    }
+    // Remove both main and proxy containers
+    await dockerOrchestrator.removeSandbox(userId);
 
     this.clearContainerState(userId);
     await this.igniteSandbox(userId, agentName);
@@ -273,9 +263,9 @@ export class SynapseOrchestrator {
 
       // Note: Sidecar proxy waits for main container internally, no external port check needed
       // Just give containers a moment to fully initialize before WebSocket connection
-      // Main container takes ~10 seconds to fully start the Gateway service
+      // Main container takes ~15 seconds to fully start the Gateway service
       console.log(`[Orchestrator] Waiting for containers to initialize...`);
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      await new Promise(resolve => setTimeout(resolve, 15000));
       console.log(`[Orchestrator] Containers initialized, connecting WS...`);
 
       // Establish WebSocket tunnel connection to sidecar proxy

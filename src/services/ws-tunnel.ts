@@ -543,6 +543,16 @@ export class WSTunnelService {
           if (message.event === 'connect.challenge') {
             console.log(`[WSTunnel] Received connect challenge for user ${userId}`);
             // Handled by waitForConnectChallenge
+          } else if (message.event === 'agent') {
+            // Handle agent events including errors
+            if (message.payload?.stream === 'lifecycle' && message.payload?.data?.phase === 'error') {
+              const error = message.payload.data.error || 'Unknown agent error';
+              console.log(`[WSTunnel] Agent error for user ${userId}: ${error}`);
+              this.sendToFeishu(userId, error);
+            } else if (message.payload?.stream === 'error') {
+              const error = message.payload.data?.reason || 'Unknown error';
+              console.log(`[WSTunnel] Agent stream error for user ${userId}: ${error}`);
+            }
           }
           break;
         case 'ping':

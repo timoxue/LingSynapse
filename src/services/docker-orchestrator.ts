@@ -1,5 +1,7 @@
 import Docker from 'dockerode';
 import { randomBytes } from 'crypto';
+import { execSync } from 'child_process';
+import { mkdirSync, existsSync } from 'fs';
 import dockerConfig from '../../config/docker.json';
 import { DockerContainerInfo, IgniteOptions } from '../types';
 import { createLogger } from '../utils/logger';
@@ -44,6 +46,21 @@ export class DockerOrchestrator {
     const proxyContainerName = `${dockerConfig.containerPrefix}${safeId}${PROXY_CONTAINER_SUFFIX}`;
     const hostStoragePath = storagePath || dockerConfig.storagePath.replace('{userId}', userId);
 
+    // Config file path for openclaw.json - use absolute path
+    const hostConfigPath = `/Users/timo/LingSynapse/sandbox-data/${userId}/openclaw.json`;
+
+    // Ensure storage directory exists and set permissions for container node user
+    try {
+      if (!existsSync(hostStoragePath)) {
+        mkdirSync(hostStoragePath, { recursive: true });
+      }
+      // Set 777 permissions so container's node user can write
+      execSync(`chmod -R 777 ${hostStoragePath}`);
+      logger.info(`Permissions set to 777 for ${hostStoragePath}`);
+    } catch (e) {
+      logger.warning(`Failed to set permissions: ${e}`);
+    }
+
     logger.info(`Igniting sandbox for user ${userId}...`);
 
     let mainContainer: Docker.Container | null = null;
@@ -59,6 +76,17 @@ export class DockerOrchestrator {
           ...Object.entries(dockerConfig.environment).map(([k, v]) => `${k}=${v}`),
           `OPENCLAW_GATEWAY_TOKEN=${gatewayToken}`,
           `OPENCLAW_USER_TOKEN=${userToken}`,
+          // LLM API Keys
+          // Direct API key for zai provider
+          `ZHIPU_API_KEY=${process.env.ZHIPU_API_KEY_GLM5 || process.env.ZHIPU_API_KEY_GLM4 || process.env.LLM_API_KEY}`,
+          // Alternative with OPENCLAW_ENV_ prefix
+          `OPENCLAW_ENV_ZHIPU_API_KEY=${process.env.ZHIPU_API_KEY_GLM5 || process.env.ZHIPU_API_KEY_GLM4 || process.env.LLM_API_KEY}`,
+          `OPENCLAW_ENV_ZHIPU_API_KEY_GLM4=${process.env.ZHIPU_API_KEY_GLM4}`,
+          `OPENCLAW_ENV_ZHIPU_API_KEY_GLM5=${process.env.ZHIPU_API_KEY_GLM5}`,
+          `OPENCLAW_ENV_LLM_API_KEY=${process.env.LLM_API_KEY}`,
+          `OPENCLAW_ENV_LLM_MODEL=${process.env.LLM_MODEL || 'glm-4.7'}`,
+          `OPENCLAW_ENV_LLM_BASE_URL=${process.env.LLM_BASE_URL}`,
+          `OPENCLAW_ENV_LLM_PROVIDER=${process.env.LLM_PROVIDER || 'zai'}`,
         ],
         // Bind to loopback only (127.0.0.1:18789) - NO EXTERNAL ACCESS
         Cmd: [
@@ -72,7 +100,7 @@ export class DockerOrchestrator {
         HostConfig: {
           NetworkMode: dockerConfig.network,
           Binds: [
-            `${hostStoragePath}:/app/storage:rw`
+            `${hostStoragePath}:/home/node/.openclaw:rw`
           ],
           AutoRemove: dockerConfig.autoRemove,
           // ABSOLUTELY NO PortBindings - no host port exposure
@@ -207,6 +235,39 @@ export class DockerOrchestrator {
       }
       logger.error(`Error finding container for user ${userId}: ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Remove sandbox containers (main + proxy) for user
+   */
+  async removeSandbox(userId: string): Promise<void> {
+    const safeId = this.sanitizeUserId(userId);
+    const mainContainerName = `${dockerConfig.containerPrefix}${safeId}`;
+    const proxyContainerName = `${dockerConfig.containerPrefix}${safeId}${PROXY_CONTAINER_SUFFIX}`;
+
+    // Remove proxy container first
+    try {
+      const proxyContainer = await this.docker.getContainer(proxyContainerName);
+      await proxyContainer.remove({ force: true });
+      logger.info(`Removed proxy container: ${proxyContainerName}`);
+      this.proxyContainers.delete(userId);
+    } catch (error: any) {
+      if (error.statusCode !== 404) {
+        logger.warning(`Failed to remove proxy container: ${error.message}`);
+      }
+    }
+
+    // Remove main container
+    try {
+      const mainContainer = await this.docker.getContainer(mainContainerName);
+      await mainContainer.remove({ force: true });
+      logger.info(`Removed main container: ${mainContainerName}`);
+      this.containers.delete(userId);
+    } catch (error: any) {
+      if (error.statusCode !== 404) {
+        logger.warning(`Failed to remove main container: ${error.message}`);
+      }
     }
   }
 

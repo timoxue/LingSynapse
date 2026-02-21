@@ -29,6 +29,8 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-zhipu}
       - LLM_MODEL=${LLM_MODEL:-glm-4.7}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4/}
+      - ZHIPU_API_KEY_GLM4=${ZHIPU_API_KEY_GLM4}
+      - ZHIPU_API_KEY_GLM5=${ZHIPU_API_KEY_GLM5}
       - SERVER_BASE_URL=${SERVER_BASE_URL:-http://localhost:5178}
     volumes:
       - ./data:/app/data
